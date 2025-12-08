@@ -84,7 +84,7 @@ pyjwt==2.10.1
     # via msal
 python-dotenv==1.1.0
     # via real-time-voice (pyproject.toml)
-requests==2.32.3
+requests==2.32.4
     # via
     #   real-time-voice (pyproject.toml)
     #   azure-core
