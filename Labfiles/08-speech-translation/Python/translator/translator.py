@@ -3,6 +3,9 @@ from datetime import datetime
 import os
 
 # Import namespaces
+from azure.core.credentials import AzureKeyCredential
+import azure.cognitiveservices.speech as speech_sdk
+
 
 
 def main():
@@ -16,9 +19,16 @@ def main():
         speech_region = os.getenv('REGION')
 
         # Configure translation
-
+        translation_config = speech_sdk.translation.SpeechTranslationConfig(speech_key, speech_region)
+        translation_config.speech_recognition_language = 'en-US'
+        translation_config.add_target_language('fr')
+        translation_config.add_target_language('es')
+        translation_config.add_target_language('hi')
+        print('Ready to translate from', translation_config.speech_recognition_language)
 
         # Configure speech
+        speech_config = speech_sdk.SpeechConfig(speech_key, speech_region)
+        print('Ready to use speech service in: ', speech_config.region)
 
 
         # Get user input
@@ -38,10 +48,63 @@ def Translate(targetLanguage):
     translation = ''
 
     # Translate speech
+    #  create a TranslationRecognizer client that can be used to recognize and translate speech from a file.
+    current_dir = os.getcwd()
+    audioFile = current_dir + '/station.wav'
+    audio_config_in = speech_sdk.AudioConfig(filename=audioFile)
+    translator = speech_sdk.translation.TranslationRecognizer(translation_config, audio_config=audio_config_in)
+    print('Getting speech from file...')
+    result = translator.recognize_once_async().get()
+    print('Translating "{}"'.format(result.text))
+    translation = result.translations[targetLanguage]
+    print(translation)
 
+    ## 1. Using speech translation with a microphone, if you have a mic
+    ### replace the above block with this one
+    '''
+    # Translate speech
+    audio_config_in = speech_sdk.AudioConfig(use_default_microphone=True)
+    translator = speech_sdk.translation.TranslationRecognizer(translation_config, audio_config = audio_config_in)
+    print("Speak now...")
+    result = translator.recognize_once_async().get()
+    print('Translating "{}"'.format(result.text))
+    translation = result.translations[targetLanguage]
+    print(translation)
+    '''
 
     # Synthesize translation
+    # use a SpeechSynthesizer client to synthesize the translation as speech and save it as a .wav file
+    output_file = "output.wav"
+    voices = {
+        "fr": "fr-FR-HenriNeural",
+        "es": "es-ES-ElviraNeural",
+        "hi": "hi-IN-MadhurNeural"
+    }
+    speech_config.speech_synthesis_voice_name = voices.get(targetLanguage)
+    audio_config_out = speech_sdk.audio.AudioOutputConfig(filename=output_file)
+    speech_synthesizer = speech_sdk.SpeechSynthesizer(speech_config=speech_config, audio_config=audio_config_out)
+    speak = speech_synthesizer.speak_text_async(translation).get()
+    if speak.reason != speech_sdk.ResultReason.SynthesizingAudioCompleted:
+        print(speak.reason)
+    else:
+        print('Spoken output saved in ' + output_file)
 
+    ## 2. Using speech synthesis with a speaker, if you have speakers
+    ### replace the above block with this one
+    '''
+    # Synthesize translation
+    voices = {
+            "fr": "fr-FR-HenriNeural",
+            "es": "es-ES-ElviraNeural",
+            "hi": "hi-IN-MadhurNeural"
+    }
+    speech_config.speech_synthesis_voice_name = voices.get(targetLanguage)
+    audio_config_out = speech_sdk.audio.AudioOutputConfig(use_default_speaker=True)
+    speech_synthesizer = speech_sdk.SpeechSynthesizer(speech_config, audio_config_out)
+    speak = speech_synthesizer.speak_text_async(translation).get()
+    if speak.reason != speech_sdk.ResultReason.SynthesizingAudioCompleted:
+        print(speak.reason)
+    '''
 
 
 if __name__ == "__main__":
