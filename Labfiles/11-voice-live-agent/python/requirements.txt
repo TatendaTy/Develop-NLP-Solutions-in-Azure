@@ -99,7 +99,7 @@ typing-extensions==4.13.2
     #   azure-core
     #   azure-identity
     #   multidict
-urllib3==2.4.0
+urllib3==2.6.3
     # via
     #   real-time-voice (pyproject.toml)
     #   requests
