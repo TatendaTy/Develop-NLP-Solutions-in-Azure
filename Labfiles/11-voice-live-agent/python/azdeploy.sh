@@ -152,39 +152,63 @@ echo "Starting FULL deployment with AZD provisioning + App Service, takes about 
 # Step 1: Provision AI Foundry with GPT Realtime model using AZD
 echo
 echo "Step 1: Provisioning AI Foundry with GPT Realtime model..."
-echo "  - Setting up AZD environment..."
-# Clear local azd state only (safe for students - doesn't delete Azure resources)
-rm -rf ~/.azd 2>/dev/null || true
-# Also clear any project-level azd state
-rm -rf .azure 2>/dev/null || true
-
-# Create fresh environment with unique name
-timeout 5 azd env new $azd_env_name --confirm >/dev/null 2>&1 || azd env new $azd_env_name >/dev/null 2>&1
-azd env set AZURE_LOCATION $location >/dev/null
-azd env set AZURE_RESOURCE_GROUP $rg >/dev/null
-echo "  - AZD environment '$azd_env_name' created (fresh state)"
-
-echo "  - Provisioning AI resources (forcing new deployment)..."
-# Verify azd authentication (inherits from Azure CLI in Cloud Shell)
-if ! azd auth login --check-status >/dev/null 2>&1; then
-    echo "  - Authenticating azd with Azure..."
-    azd auth login 2>/dev/null || true
+echo "  - Validating Azure CLI login and subscription..."
+# Ensure Azure CLI is logged in
+if ! az account show >/dev/null 2>&1; then
+    echo "ERROR: Azure CLI not logged in. Please run 'az login' and retry."
+    exit 1
 fi
 
-# Force a completely fresh deployment by combining multiple techniques
-azd config set alpha.infrastructure.deployment.name "azd-gpt-realtime-$(date +%s)"
-# Clear any cached deployment state and force deployment
-azd env refresh --no-prompt 2>/dev/null || true
-azd provision 
+# Discover subscription and tenant from current Azure CLI context
+sub_id=$(az account show --query id -o tsv | tr -d '\r')
+tenant_id=$(az account show --query tenantId -o tsv | tr -d '\r')
+if [ -z "$sub_id" ] || [ -z "$tenant_id" ]; then
+    echo "ERROR: Failed to resolve subscription or tenant from Azure CLI context."
+    exit 1
+fi
+
+echo "  - Setting azd defaults and environment (non-interactive)..."
+# Set azd defaults and create env non-interactively
+azd config set defaults.subscription "$sub_id" >/dev/null
+azd config set defaults.location "$location" >/dev/null
+
+# Create or ensure the azd environment exists without prompts
+if ! azd env get-values --environment "$azd_env_name" >/dev/null 2>&1; then
+    azd env new "$azd_env_name" --subscription "$sub_id" --location "$location" --no-prompt >/dev/null
+fi
+
+# Stamp common environment values used by bicep params and outputs
+azd env set AZURE_SUBSCRIPTION_ID "$sub_id" >/dev/null
+azd env set AZURE_TENANT_ID "$tenant_id" >/dev/null
+azd env set AZURE_LOCATION "$location" >/dev/null
+azd env set AZURE_RESOURCE_GROUP "$rg" >/dev/null
+
+echo "  - Ensuring azd is authenticated..."
+if ! azd auth login --check-status >/dev/null 2>&1; then
+    azd auth login || {
+        echo "ERROR: azd authentication failed. Please run 'azd auth login' and retry."
+        exit 1
+    }
+fi
+
+echo "  - Provisioning AI resources (non-interactive)..."
+azd provision --no-prompt --environment "$azd_env_name" || {
+    echo "ERROR: azd provision failed. Please review the errors above."
+    exit 1
+}
 
 echo "  - Retrieving AI Foundry endpoint, API key, and model name..."
-endpoint=$(azd env get-values --output json | jq -r '.AZURE_OPENAI_ENDPOINT')
-api_key=$(azd env get-values --output json | jq -r '.AZURE_OPENAI_API_KEY')
-model_name=$(azd env get-values --output json | jq -r '.AZURE_OPENAI_REALTIME_MODEL_NAME')
+# Parse azd env values (no jq) and fetch fresh key from Cognitive Services
+env_values=$(azd env get-values --environment "$azd_env_name" | tr -d '\r')
+endpoint=$(printf "%s\n" "$env_values" | sed -n 's/^AZURE_OPENAI_ENDPOINT=//p' | sed 's/^\(["\'"'"']\)\(.*\)\1$/\2/')
+model_name=$(printf "%s\n" "$env_values" | sed -n 's/^AZURE_OPENAI_REALTIME_MODEL_NAME=//p' | sed 's/^\(["\'"'"']\)\(.*\)\1$/\2/')
+foundry_name=$(printf "%s\n" "$env_values" | sed -n 's/^AZUREAI_FOUNDRY_NAME=//p' | sed 's/^\(["\'"'"']\)\(.*\)\1$/\2/')
 
-if [ "$endpoint" = "null" ] || [ "$endpoint" = "" ] || [ "$api_key" = "null" ] || [ "$api_key" = "" ] || [ "$model_name" = "null" ] || [ "$model_name" = "" ]; then
-    echo "ERROR: Failed to retrieve AI Foundry endpoint, API key, or model name from azd"
-    echo "Please check the azd provision output and try again"
+# Fetch current key directly from the Cognitive Services account (avoids stale env)
+api_key=$(az cognitiveservices account keys list -g "$rg" -n "$foundry_name" --query "key1" -o tsv | tr -d '\r')
+
+if [ -z "$endpoint" ] || [ -z "$api_key" ] || [ -z "$model_name" ]; then
+    echo "ERROR: Missing endpoint, API key, or model name. Ensure azd provision completed successfully."
     exit 1
 fi
 
